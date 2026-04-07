@@ -302,121 +302,115 @@ class _ImageEditorWidgetState extends State<ImageEditorWidget> {
       );
     }
 
-    return Stack(
-      children: [
-        // ── Main editor layout ─────────────────────────────────────────────
-        Container(
-          color: _theme.backgroundColor,
-          child: Column(
-            children: [
-              EditorToolbar(
-                controller: _ctrl,
-                config: widget.config,
-                theme: _theme,
-                onExport: _export,
-                onClose: widget.onClose ?? () => Navigator.maybePop(context),
-              ),
-              Expanded(
-                child: RepaintBoundary(
-                  key: _ctrl.exportKey,
-                  child: AnimatedBuilder(
-                    animation: _ctrl,
-                    builder: (_, __) => Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        _buildFilteredImage(),
-                        if (widget.config.enableDrawing)
-                          LayoutBuilder(
-                            builder: (ctx, constraints) => DrawingCanvas(
-                              controller: _ctrl,
-                              size: Size(constraints.maxWidth,
-                                  constraints.maxHeight),
-                              isActive:
-                                  _ctrl.activeTool == EditorTool.drawing,
-                            ),
-                          ),
-                        if (widget.config.enableText)
-                          TextOverlayLayer(
-                            controller: _ctrl,
-                            theme: _theme,
-                            onTap: _onTextLayerTap,
-                          ),
-                        if (widget.config.enableStickers)
-                          StickerLayerWidget(
-                              controller: _ctrl, theme: _theme),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              AnimatedBuilder(
-                animation: _ctrl,
-                builder: (_, __) => _buildToolPanel(),
-              ),
-              EditorBottomBar(
-                  controller: _ctrl,
-                  config: widget.config,
-                  theme: _theme),
-            ],
+    return Container(
+      color: _theme.backgroundColor,
+      child: Column(
+        children: [
+          // ── Top toolbar ─────────────────────────────────────────────────
+          EditorToolbar(
+            controller: _ctrl,
+            config: widget.config,
+            theme: _theme,
+            onExport: _export,
+            onClose: widget.onClose ?? () => Navigator.maybePop(context),
           ),
-        ),
 
-        // ── Crop overlay — sits above everything including bottom bar ───────
-        AnimatedBuilder(
-          animation: _ctrl,
-          builder: (_, __) {
-            if (!widget.config.enableCrop ||
-                _ctrl.activeTool != EditorTool.crop) {
-              return const SizedBox.shrink();
-            }
-            return LayoutBuilder(builder: (ctx, constraints) {
-              // constraints here = full Stack size (whole editor)
-              // We want the overlay to cover only the image canvas area,
-              // so offset it below the toolbar.
-              final toolbarH = _theme.toolbarHeight;
-              final bottomH = _theme.bottomBarHeight;
-              final canvasH =
-                  constraints.maxHeight - toolbarH - bottomH;
-              final sz = Size(constraints.maxWidth, canvasH);
-              _canvasSize = sz;
-              final aspect = (_imgW > 0 && _imgH > 0)
-                  ? _imgW / _imgH
-                  : 1.0;
-              return Positioned(
-                top: toolbarH,
-                left: 0,
-                right: 0,
-                height: canvasH,
-                child: CropOverlay(
-                  canvasSize: sz,
-                  imageAspect: aspect,
-                  ratios: widget.config.cropAspectRatios ??
-                      CropAspectRatio.defaultRatios,
-                  onCropChanged: (r) => _pendingCropRect = r,
-                  onApply: _applyCrop,
-                ),
-              );
-            });
-          },
-        ),
+          // ── Image canvas + crop overlay stacked together ─────────────────
+          Expanded(
+            child: AnimatedBuilder(
+              animation: _ctrl,
+              builder: (_, __) {
+                final isCrop = widget.config.enableCrop &&
+                    _ctrl.activeTool == EditorTool.crop;
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Image + drawing/text/stickers (always rendered)
+                    RepaintBoundary(
+                      key: _ctrl.exportKey,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          _buildFilteredImage(),
+                          if (widget.config.enableDrawing)
+                            LayoutBuilder(
+                              builder: (ctx, constraints) => DrawingCanvas(
+                                controller: _ctrl,
+                                size: Size(constraints.maxWidth,
+                                    constraints.maxHeight),
+                                isActive:
+                                    _ctrl.activeTool == EditorTool.drawing,
+                              ),
+                            ),
+                          if (widget.config.enableText)
+                            TextOverlayLayer(
+                              controller: _ctrl,
+                              theme: _theme,
+                              onTap: _onTextLayerTap,
+                            ),
+                          if (widget.config.enableStickers)
+                            StickerLayerWidget(
+                                controller: _ctrl, theme: _theme),
+                        ],
+                      ),
+                    ),
 
-        // ── Exporting indicator ────────────────────────────────────────────
-        if (_exporting)
-          Container(
-            color: Colors.black54,
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(color: _theme.activeToolColor),
-                  const SizedBox(height: 12),
-                  Text('Saving...',
-                      style: TextStyle(color: _theme.textColor)),
-                ],
-              ),
+                    // Crop overlay — rendered ON TOP of image inside same Stack
+                    if (isCrop)
+                      LayoutBuilder(builder: (ctx, constraints) {
+                        final sz = Size(
+                            constraints.maxWidth, constraints.maxHeight);
+                        _canvasSize = sz;
+                        final aspect = (_imgW > 0 && _imgH > 0)
+                            ? _imgW / _imgH
+                            : 1.0;
+                        return CropOverlay(
+                          canvasSize: sz,
+                          imageAspect: aspect,
+                          ratios: widget.config.cropAspectRatios ??
+                              CropAspectRatio.defaultRatios,
+                          onCropChanged: (r) => _pendingCropRect = r,
+                          onApply: _applyCrop,
+                        );
+                      }),
+
+                    // Exporting indicator
+                    if (_exporting)
+                      Container(
+                        color: Colors.black54,
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              CircularProgressIndicator(
+                                  color: _theme.activeToolColor),
+                              const SizedBox(height: 12),
+                              Text('Saving...',
+                                  style:
+                                      TextStyle(color: _theme.textColor)),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
           ),
-      ],
+
+          // ── Tool panel (hidden when crop is active) ───────────────────────
+          AnimatedBuilder(
+            animation: _ctrl,
+            builder: (_, __) => _buildToolPanel(),
+          ),
+
+          // ── Bottom nav bar ────────────────────────────────────────────────
+          EditorBottomBar(
+              controller: _ctrl,
+              config: widget.config,
+              theme: _theme),
+        ],
+      ),
     );
   }
 
