@@ -357,22 +357,14 @@ class _ImageEditorWidgetState extends State<ImageEditorWidget> {
 
                     // Crop overlay — rendered ON TOP of image inside same Stack
                     if (isCrop)
-                      LayoutBuilder(builder: (ctx, constraints) {
-                        final sz = Size(
-                            constraints.maxWidth, constraints.maxHeight);
-                        _canvasSize = sz;
-                        final aspect = (_imgW > 0 && _imgH > 0)
-                            ? _imgW / _imgH
-                            : 1.0;
-                        return CropOverlay(
-                          canvasSize: sz,
-                          imageAspect: aspect,
-                          ratios: widget.config.cropAspectRatios ??
-                              CropAspectRatio.defaultRatios,
-                          onCropChanged: (r) => _pendingCropRect = r,
-                          onApply: _applyCrop,
-                        );
-                      }),
+                      _CropOverlayWrapper(
+                        imgW: _imgW,
+                        imgH: _imgH,
+                        config: widget.config,
+                        onSizeRecorded: (sz) => _canvasSize = sz,
+                        onCropChanged: (r) => _pendingCropRect = r,
+                        onApply: _applyCrop,
+                      ),
 
                     // Exporting indicator
                     if (_exporting)
@@ -819,6 +811,45 @@ class _ImageEditorWidgetState extends State<ImageEditorWidget> {
     _ctrl.removeListener(_onControllerChange);
     if (widget.controller == null) _ctrl.dispose();
     super.dispose();
+  }
+}
+
+// ── Crop overlay wrapper ──────────────────────────────────────────────────
+// A thin StatelessWidget that uses LayoutBuilder to measure the canvas,
+// records the size, then renders CropOverlay.
+class _CropOverlayWrapper extends StatelessWidget {
+  final int imgW;
+  final int imgH;
+  final EditorConfig config;
+  final void Function(Size) onSizeRecorded;
+  final void Function(Rect) onCropChanged;
+  final VoidCallback onApply;
+
+  const _CropOverlayWrapper({
+    required this.imgW,
+    required this.imgH,
+    required this.config,
+    required this.onSizeRecorded,
+    required this.onCropChanged,
+    required this.onApply,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final aspect =
+        (imgW > 0 && imgH > 0) ? imgW / imgH : 1.0;
+    return LayoutBuilder(builder: (ctx, constraints) {
+      final sz = Size(constraints.maxWidth, constraints.maxHeight);
+      // Record synchronously so _applyCrop() can read it
+      WidgetsBinding.instance.addPostFrameCallback((_) => onSizeRecorded(sz));
+      onSizeRecorded(sz); // also call immediately
+      return CropOverlay(
+        imageAspect: aspect,
+        ratios: config.cropAspectRatios ?? CropAspectRatio.defaultRatios,
+        onCropChanged: onCropChanged,
+        onApply: onApply,
+      );
+    });
   }
 }
 

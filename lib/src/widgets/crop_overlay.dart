@@ -2,12 +2,8 @@ import 'package:flutter/material.dart';
 import '../models/editor_config.dart';
 
 /// Interactive crop overlay.
-///
-/// Receives [canvasSize] and [imageAspect] so it can compute the exact
-/// rendered-image rect (accounting for BoxFit.contain letterboxing) and
-/// constrain the crop handles to that region.
+/// Uses its own LayoutBuilder internally — no canvasSize param needed.
 class CropOverlay extends StatefulWidget {
-  final Size canvasSize;
   final double imageAspect; // imgWidth / imgHeight
   final List<CropAspectRatio> ratios;
   final void Function(Rect cropRect) onCropChanged;
@@ -15,7 +11,6 @@ class CropOverlay extends StatefulWidget {
 
   const CropOverlay({
     super.key,
-    required this.canvasSize,
     required this.imageAspect,
     required this.ratios,
     required this.onCropChanged,
@@ -27,45 +22,23 @@ class CropOverlay extends StatefulWidget {
 }
 
 class _CropOverlayState extends State<CropOverlay> {
-  /// The actual rect the image occupies inside the canvas (letterbox-aware).
-  late Rect _imageRect;
-  /// Current crop rect — always in canvas coordinates.
-  late Rect _cropRect;
+  Rect? _imageRect;
+  Rect? _cropRect;
   CropAspectRatio _selectedRatio = CropAspectRatio.free;
 
-  @override
-  void initState() {
-    super.initState();
-    _imageRect = _computeImageRect();
-    // Default crop = full image area (with small inset so handles are visible)
-    _cropRect = _imageRect.deflate(1);
-  }
-
-  @override
-  void didUpdateWidget(CropOverlay old) {
-    super.didUpdateWidget(old);
-    if (old.canvasSize != widget.canvasSize ||
-        old.imageAspect != widget.imageAspect) {
-      _imageRect = _computeImageRect();
-      _cropRect = _imageRect.deflate(1);
-    }
-  }
-
-  /// Compute the rect the image occupies inside [canvasSize] with BoxFit.contain.
-  Rect _computeImageRect() {
-    final cs = widget.canvasSize;
-    final ia = widget.imageAspect;
+  /// Compute the rect the image occupies with BoxFit.contain inside [canvasSize].
+  Rect _computeImageRect(Size cs) {
+    final ia = widget.imageAspect.isFinite && widget.imageAspect > 0
+        ? widget.imageAspect
+        : 1.0;
     final ca = cs.width / cs.height;
-
     double rw, rh, ox, oy;
     if (ia > ca) {
-      // Letterboxed top/bottom
       rw = cs.width;
       rh = cs.width / ia;
       ox = 0;
       oy = (cs.height - rh) / 2;
     } else {
-      // Pillarboxed left/right
       rh = cs.height;
       rw = cs.height * ia;
       ox = (cs.width - rw) / 2;
@@ -74,158 +47,190 @@ class _CropOverlayState extends State<CropOverlay> {
     return Rect.fromLTWH(ox, oy, rw, rh);
   }
 
-  void _applyRatio(CropAspectRatio ratio) {
-    setState(() {
-      _selectedRatio = ratio;
-      if (ratio.ratio == null) return; // free
-
-      final w = _cropRect.width;
-      final h = w / ratio.ratio!;
-      double top = _cropRect.top + (_cropRect.height - h) / 2;
-      top = top.clamp(_imageRect.top, _imageRect.bottom - h);
-      final bottom = (top + h).clamp(top + 40.0, _imageRect.bottom);
-      _cropRect = Rect.fromLTRB(
-          _cropRect.left, top, _cropRect.right, bottom);
-    });
-    widget.onCropChanged(_cropRect);
+  void _initRects(Size cs) {
+    final ir = _computeImageRect(cs);
+    _imageRect = ir;
+    // Inset by 8px so handles are clearly visible
+    _cropRect = ir.deflate(8).isEmpty ? ir : ir.deflate(8);
   }
 
-  void _onHandleDrag(String handle, DragUpdateDetails d) {
+  void _applyRatio(CropAspectRatio ratio, Size cs) {
+    final ir = _imageRect ?? _computeImageRect(cs);
     setState(() {
-      double l = _cropRect.left, t = _cropRect.top;
-      double r = _cropRect.right, b = _cropRect.bottom;
+      _selectedRatio = ratio;
+      if (ratio.ratio == null) return;
+      final cr = _cropRect ?? ir;
+      final w = cr.width;
+      final h = w / ratio.ratio!;
+      double top = cr.center.dy - h / 2;
+      top = top.clamp(ir.top, ir.bottom - h.clamp(40, ir.height));
+      final bottom = (top + h).clamp(top + 40.0, ir.bottom);
+      _cropRect = Rect.fromLTRB(cr.left, top, cr.right, bottom);
+    });
+    widget.onCropChanged(_cropRect!);
+  }
+
+  void _onHandleDrag(String handle, DragUpdateDetails d, Size cs) {
+    final ir = _imageRect ?? _computeImageRect(cs);
+    setState(() {
+      final cr = _cropRect ?? ir;
+      double l = cr.left, t = cr.top, r = cr.right, b = cr.bottom;
       final dx = d.delta.dx, dy = d.delta.dy;
       const minSize = 40.0;
 
-      if (handle.contains('l'))
-        l = (l + dx).clamp(_imageRect.left, r - minSize);
-      if (handle.contains('r'))
-        r = (r + dx).clamp(l + minSize, _imageRect.right);
-      if (handle.contains('t'))
-        t = (t + dy).clamp(_imageRect.top, b - minSize);
-      if (handle.contains('b'))
-        b = (b + dy).clamp(t + minSize, _imageRect.bottom);
+      if (handle.contains('l')) l = (l + dx).clamp(ir.left, r - minSize);
+      if (handle.contains('r')) r = (r + dx).clamp(l + minSize, ir.right);
+      if (handle.contains('t')) t = (t + dy).clamp(ir.top, b - minSize);
+      if (handle.contains('b')) b = (b + dy).clamp(t + minSize, ir.bottom);
 
       if (_selectedRatio.ratio != null) {
         final w = r - l;
         if (handle.contains('l') || handle.contains('r')) {
-          b = (t + w / _selectedRatio.ratio!)
-              .clamp(t + minSize, _imageRect.bottom);
+          b = (t + w / _selectedRatio.ratio!).clamp(t + minSize, ir.bottom);
         } else {
-          r = (l + (b - t) * _selectedRatio.ratio!)
-              .clamp(l + minSize, _imageRect.right);
+          r = (l + (b - t) * _selectedRatio.ratio!).clamp(l + minSize, ir.right);
         }
       }
-
       _cropRect = Rect.fromLTRB(l, t, r, b);
     });
-    widget.onCropChanged(_cropRect);
+    widget.onCropChanged(_cropRect!);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        // Dim everything outside the image area + dim the uncropped area
-        Positioned.fill(
-          child: CustomPaint(
-            size: widget.canvasSize,
-            painter: _DimPainter(
-              canvasSize: widget.canvasSize,
-              imageRect: _imageRect,
-              cropRect: _cropRect,
+    return LayoutBuilder(builder: (ctx, constraints) {
+      final cs = Size(constraints.maxWidth, constraints.maxHeight);
+
+      // Init on first build or if canvas size changed
+      if (_imageRect == null ||
+          _imageRect!.width != cs.width && _imageRect!.height != cs.height) {
+        _initRects(cs);
+      }
+
+      final ir = _imageRect!;
+      final cr = _cropRect!;
+
+      return SizedBox.expand(
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // ── Dim layer ──────────────────────────────────────────────────
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _DimPainter(imageRect: ir, cropRect: cr),
+              ),
             ),
-          ),
-        ),
 
-        // Crop border + rule-of-thirds grid
-        Positioned(
-          left: _cropRect.left,
-          top: _cropRect.top,
-          width: _cropRect.width,
-          height: _cropRect.height,
-          child: Container(
-            decoration:
-                BoxDecoration(border: Border.all(color: Colors.white, width: 1.5)),
-            child: CustomPaint(painter: _GridPainter()),
-          ),
-        ),
-
-        // Corner handles
-        ..._buildHandles(),
-
-        // Bottom bar: ratios + Apply
-        Positioned(
-          bottom: 0, left: 0, right: 0,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            _buildRatioBar(),
-            GestureDetector(
-              onTap: widget.onApply,
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                color: const Color(0xFF00B4D8),
-                child: const Text(
-                  '✓  Apply Crop',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15),
+            // ── Crop border + grid ─────────────────────────────────────────
+            Positioned(
+              left: cr.left,
+              top: cr.top,
+              width: cr.width,
+              height: cr.height,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                  child: CustomPaint(painter: _GridPainter()),
                 ),
               ),
             ),
-          ]),
+
+            // ── Corner handles ─────────────────────────────────────────────
+            ..._buildHandles(cr, cs),
+
+            // ── Bottom bar: ratios + Apply ─────────────────────────────────
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildRatioBar(cs),
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: widget.onApply,
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        color: const Color(0xFF00B4D8),
+                        child: const Text(
+                          '✓  Apply Crop',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-      ],
-    );
+      );
+    });
   }
 
-  List<Widget> _buildHandles() {
+  List<Widget> _buildHandles(Rect cr, Size cs) {
+    const hSize = 30.0;
+    const half = hSize / 2;
     final handles = {
-      'tl': Offset(_cropRect.left, _cropRect.top),
-      'tr': Offset(_cropRect.right, _cropRect.top),
-      'bl': Offset(_cropRect.left, _cropRect.bottom),
-      'br': Offset(_cropRect.right, _cropRect.bottom),
+      'tl': Offset(cr.left, cr.top),
+      'tr': Offset(cr.right, cr.top),
+      'bl': Offset(cr.left, cr.bottom),
+      'br': Offset(cr.right, cr.bottom),
     };
     return handles.entries.map((e) {
       return Positioned(
-        left: e.value.dx - 14,
-        top: e.value.dy - 14,
+        left: e.value.dx - half,
+        top: e.value.dy - half,
+        width: hSize,
+        height: hSize,
         child: GestureDetector(
-          onPanUpdate: (d) => _onHandleDrag(e.key, d),
+          behavior: HitTestBehavior.opaque,
+          onPanUpdate: (d) => _onHandleDrag(e.key, d, cs),
           child: Container(
-            width: 28, height: 28,
-            decoration:
-                const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(color: Colors.black38, blurRadius: 4),
+              ],
+            ),
           ),
         ),
       );
     }).toList();
   }
 
-  Widget _buildRatioBar() {
-    final ratios =
-        widget.ratios.isEmpty ? CropAspectRatio.defaultRatios : widget.ratios;
+  Widget _buildRatioBar(Size cs) {
+    final ratios = widget.ratios.isEmpty
+        ? CropAspectRatio.defaultRatios
+        : widget.ratios;
     return Container(
-      height: 44,
-      color: Colors.black54,
+      height: 48,
+      color: Colors.black.withOpacity(0.6),
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         children: ratios.map((r) {
           final isSel = r.label == _selectedRatio.label;
           return GestureDetector(
-            onTap: () => _applyRatio(r),
+            onTap: () => _applyRatio(r, cs),
             child: Container(
               margin: const EdgeInsets.only(right: 8),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
               decoration: BoxDecoration(
                 color: isSel ? Colors.white : Colors.transparent,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white54),
+                border: Border.all(color: Colors.white60),
               ),
               child: Text(
                 r.label,
@@ -243,62 +248,51 @@ class _CropOverlayState extends State<CropOverlay> {
   }
 }
 
-/// Dims everything OUTSIDE the crop rect.
-/// Also dims the area inside [imageRect] but outside [cropRect],
-/// and fully blacks out the letterbox bars (outside [imageRect]).
+// ── Painters ───────────────────────────────────────────────────────────────
+
 class _DimPainter extends CustomPainter {
-  final Size canvasSize;
   final Rect imageRect;
   final Rect cropRect;
-
-  _DimPainter({
-    required this.canvasSize,
-    required this.imageRect,
-    required this.cropRect,
-  });
+  _DimPainter({required this.imageRect, required this.cropRect});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final fullRect = Rect.fromLTWH(0, 0, canvasSize.width, canvasSize.height);
+    final full = Offset.zero & size;
 
-    // 1) Dim letterbox bars (outside image rect) — dark
-    final barPaint = Paint()..color = Colors.black.withOpacity(0.75);
-    final barPath = Path()
-      ..addRect(fullRect)
-      ..addRect(imageRect)
-      ..fillType = PathFillType.evenOdd;
-    canvas.drawPath(barPath, barPaint);
+    // Black bars outside image area
+    canvas.drawPath(
+      Path()
+        ..addRect(full)
+        ..addRect(imageRect)
+        ..fillType = PathFillType.evenOdd,
+      Paint()..color = Colors.black.withOpacity(0.8),
+    );
 
-    // 2) Dim image area that is NOT inside the crop rect — semi-transparent
-    final dimPaint = Paint()..color = Colors.black.withOpacity(0.55);
-    final dimPath = Path()
-      ..addRect(imageRect)
-      ..addRect(cropRect)
-      ..fillType = PathFillType.evenOdd;
-    canvas.drawPath(dimPath, dimPaint);
+    // Semi-dim inside image but outside crop
+    canvas.drawPath(
+      Path()
+        ..addRect(imageRect)
+        ..addRect(cropRect)
+        ..fillType = PathFillType.evenOdd,
+      Paint()..color = Colors.black.withOpacity(0.5),
+    );
   }
 
   @override
   bool shouldRepaint(_DimPainter old) =>
-      old.cropRect != cropRect ||
-      old.imageRect != imageRect ||
-      old.canvasSize != canvasSize;
+      old.cropRect != cropRect || old.imageRect != imageRect;
 }
 
 class _GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white30
-      ..strokeWidth = 0.5;
-    canvas.drawLine(Offset(size.width / 3, 0),
-        Offset(size.width / 3, size.height), paint);
-    canvas.drawLine(Offset(size.width * 2 / 3, 0),
-        Offset(size.width * 2 / 3, size.height), paint);
-    canvas.drawLine(Offset(0, size.height / 3),
-        Offset(size.width, size.height / 3), paint);
-    canvas.drawLine(Offset(0, size.height * 2 / 3),
-        Offset(size.width, size.height * 2 / 3), paint);
+    final p = Paint()
+      ..color = Colors.white38
+      ..strokeWidth = 0.6;
+    canvas.drawLine(Offset(size.width / 3, 0), Offset(size.width / 3, size.height), p);
+    canvas.drawLine(Offset(size.width * 2 / 3, 0), Offset(size.width * 2 / 3, size.height), p);
+    canvas.drawLine(Offset(0, size.height / 3), Offset(size.width, size.height / 3), p);
+    canvas.drawLine(Offset(0, size.height * 2 / 3), Offset(size.width, size.height * 2 / 3), p);
   }
 
   @override
