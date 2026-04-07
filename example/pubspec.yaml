@@ -1,0 +1,19 @@
+name: flutter_image_editor_pro_example
+description: Example app for flutter_image_editor_pro
+
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_image_editor_pro:
+    path: ../
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/demo.jpg

@@ -1,0 +1,23 @@
+name: flutter_image_editor_pro
+description: A complete, fully customizable image editor for Flutter. Supports crop, rotate, filters, drawing, text overlay, stickers, and undo/redo. Pure Flutter — works on Android, iOS, Web, and Desktop.
+version: 1.0.0
+homepage: https://github.com/yourusername/flutter_image_editor_pro
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  image: ^4.1.7
+  path_provider: ^2.1.2
+  screenshot: ^3.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  # No assets required — stickers are provided by the user
