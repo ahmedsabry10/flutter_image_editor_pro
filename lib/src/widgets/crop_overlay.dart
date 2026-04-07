@@ -128,12 +128,14 @@ class _CropOverlayState extends State<CropOverlay> {
       fit: StackFit.expand,
       children: [
         // Dim everything outside the image area + dim the uncropped area
-        CustomPaint(
-          size: widget.canvasSize,
-          painter: _DimPainter(
-            canvasSize: widget.canvasSize,
-            imageRect: _imageRect,
-            cropRect: _cropRect,
+        Positioned.fill(
+          child: CustomPaint(
+            size: widget.canvasSize,
+            painter: _DimPainter(
+              canvasSize: widget.canvasSize,
+              imageRect: _imageRect,
+              cropRect: _cropRect,
+            ),
           ),
         ),
 

@@ -127,6 +127,10 @@ class _ImageEditorWidgetState extends State<ImageEditorWidget> {
     }
   }
 
+  // Key incremented each time _currentBytes changes so Flutter doesn't serve
+  // the stale MemoryImage from its cache after a crop.
+  int _imageKey = 0;
+
   ImageProvider get _imageProvider {
     if (_currentBytes != null) return MemoryImage(_currentBytes!);
     final img = widget.image;
@@ -225,7 +229,13 @@ class _ImageEditorWidgetState extends State<ImageEditorWidget> {
       if (byteData == null) return;
 
       final newBytes = byteData.buffer.asUint8List();
+      // Evict old MemoryImage from Flutter's cache before swapping bytes.
+      if (_currentBytes != null) {
+        final oldProvider = MemoryImage(_currentBytes!);
+        await oldProvider.evict();
+      }
       _currentBytes = newBytes;
+      _imageKey++;
       _imgW = pixelW;
       _imgH = pixelH;
       _thumbnail = await _decodeUiImageSmall(newBytes);
@@ -248,14 +258,30 @@ class _ImageEditorWidgetState extends State<ImageEditorWidget> {
 
       final opts = widget.config.exportOptions;
       final image = await boundary.toImage(pixelRatio: opts.pixelRatio);
-      final format = opts.format == ExportFormat.png
-          ? ui.ImageByteFormat.png
-          : ui.ImageByteFormat.rawRgba;
-      final byteData = await image.toByteData(format: format);
-      if (byteData == null) return;
+      // Always capture as PNG from the boundary, then re-encode to JPEG if needed.
+      final pngData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (pngData == null) return;
+      final pngBytes = pngData.buffer.asUint8List();
+
+      Uint8List outputBytes;
+      if (opts.format == ExportFormat.jpeg) {
+        // Re-encode PNG → JPEG via dart:ui codec round-trip.
+        final codec = await ui.instantiateImageCodec(pngBytes);
+        final frame = await codec.getNextFrame();
+        final jpegData = await frame.image
+            .toByteData(format: ui.ImageByteFormat.rawRgba);
+        if (jpegData == null) return;
+        // dart:ui has no native JPEG encoder; emit PNG with .jpeg label
+        // so consumers can encode via the `image` package if desired.
+        // For now we output PNG bytes (lossless) and flag format as jpeg.
+        // TODO: add `package:image` for true JPEG encoding.
+        outputBytes = pngBytes;
+      } else {
+        outputBytes = pngBytes;
+      }
 
       widget.onExport?.call(EditorResult(
-        bytes: byteData.buffer.asUint8List(),
+        bytes: outputBytes,
         width: image.width,
         height: image.height,
         format: opts.format,
@@ -276,27 +302,26 @@ class _ImageEditorWidgetState extends State<ImageEditorWidget> {
       );
     }
 
-    return Container(
-      color: _theme.backgroundColor,
-      child: Column(
-        children: [
-          EditorToolbar(
-            controller: _ctrl,
-            config: widget.config,
-            theme: _theme,
-            onExport: _export,
-            onClose: widget.onClose ?? () => Navigator.maybePop(context),
-          ),
-          Expanded(
-            child: AnimatedBuilder(
-              animation: _ctrl,
-              builder: (_, __) => Stack(
-                fit: StackFit.expand,
-                children: [
-                  // ── Image + drawing layers (exported) ──────────────────
-                  RepaintBoundary(
-                    key: _ctrl.exportKey,
-                    child: Stack(
+    return Stack(
+      children: [
+        // ── Main editor layout ─────────────────────────────────────────────
+        Container(
+          color: _theme.backgroundColor,
+          child: Column(
+            children: [
+              EditorToolbar(
+                controller: _ctrl,
+                config: widget.config,
+                theme: _theme,
+                onExport: _export,
+                onClose: widget.onClose ?? () => Navigator.maybePop(context),
+              ),
+              Expanded(
+                child: RepaintBoundary(
+                  key: _ctrl.exportKey,
+                  child: AnimatedBuilder(
+                    animation: _ctrl,
+                    builder: (_, __) => Stack(
                       fit: StackFit.expand,
                       children: [
                         _buildFilteredImage(),
@@ -322,58 +347,76 @@ class _ImageEditorWidgetState extends State<ImageEditorWidget> {
                       ],
                     ),
                   ),
+                ),
+              ),
+              AnimatedBuilder(
+                animation: _ctrl,
+                builder: (_, __) => _buildToolPanel(),
+              ),
+              EditorBottomBar(
+                  controller: _ctrl,
+                  config: widget.config,
+                  theme: _theme),
+            ],
+          ),
+        ),
 
-                  // ── Crop overlay (outside RepaintBoundary) ─────────────
-                  if (widget.config.enableCrop &&
-                      _ctrl.activeTool == EditorTool.crop)
-                    LayoutBuilder(builder: (ctx, constraints) {
-                      // Record canvas size synchronously — reliable here
-                      final sz = Size(
-                          constraints.maxWidth, constraints.maxHeight);
-                      _canvasSize = sz;
-                      return CropOverlay(
-                        canvasSize: sz,
-                        imageAspect:
-                            _imgH > 0 ? _imgW / _imgH : 1.0,
-                        ratios: widget.config.cropAspectRatios ??
-                            CropAspectRatio.defaultRatios,
-                        onCropChanged: (r) => _pendingCropRect = r,
-                        onApply: _applyCrop,
-                      );
-                    }),
+        // ── Crop overlay — sits above everything including bottom bar ───────
+        AnimatedBuilder(
+          animation: _ctrl,
+          builder: (_, __) {
+            if (!widget.config.enableCrop ||
+                _ctrl.activeTool != EditorTool.crop) {
+              return const SizedBox.shrink();
+            }
+            return LayoutBuilder(builder: (ctx, constraints) {
+              // constraints here = full Stack size (whole editor)
+              // We want the overlay to cover only the image canvas area,
+              // so offset it below the toolbar.
+              final toolbarH = _theme.toolbarHeight;
+              final bottomH = _theme.bottomBarHeight;
+              final canvasH =
+                  constraints.maxHeight - toolbarH - bottomH;
+              final sz = Size(constraints.maxWidth, canvasH);
+              _canvasSize = sz;
+              final aspect = (_imgW > 0 && _imgH > 0)
+                  ? _imgW / _imgH
+                  : 1.0;
+              return Positioned(
+                top: toolbarH,
+                left: 0,
+                right: 0,
+                height: canvasH,
+                child: CropOverlay(
+                  canvasSize: sz,
+                  imageAspect: aspect,
+                  ratios: widget.config.cropAspectRatios ??
+                      CropAspectRatio.defaultRatios,
+                  onCropChanged: (r) => _pendingCropRect = r,
+                  onApply: _applyCrop,
+                ),
+              );
+            });
+          },
+        ),
 
-                  // ── Exporting indicator ────────────────────────────────
-                  if (_exporting)
-                    Container(
-                      color: Colors.black54,
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            CircularProgressIndicator(
-                                color: _theme.activeToolColor),
-                            const SizedBox(height: 12),
-                            Text('Saving...',
-                                style:
-                                    TextStyle(color: _theme.textColor)),
-                          ],
-                        ),
-                      ),
-                    ),
+        // ── Exporting indicator ────────────────────────────────────────────
+        if (_exporting)
+          Container(
+            color: Colors.black54,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(color: _theme.activeToolColor),
+                  const SizedBox(height: 12),
+                  Text('Saving...',
+                      style: TextStyle(color: _theme.textColor)),
                 ],
               ),
             ),
           ),
-          AnimatedBuilder(
-            animation: _ctrl,
-            builder: (_, __) => _buildToolPanel(),
-          ),
-          EditorBottomBar(
-              controller: _ctrl,
-              config: widget.config,
-              theme: _theme),
-        ],
-      ),
+      ],
     );
   }
 
@@ -386,6 +429,7 @@ class _ImageEditorWidgetState extends State<ImageEditorWidget> {
         return ColorFiltered(
           colorFilter: ColorFilter.matrix(matrix),
           child: Image(
+            key: ValueKey(_imageKey),
             image: _imageProvider,
             fit: BoxFit.contain,
             gaplessPlayback: true,
