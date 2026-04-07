@@ -5,35 +5,67 @@ import '../filters/filter_preset.dart';
 import '../models/editor_config.dart';
 import '../models/export_options.dart';
 import '../models/sticker_pack.dart';
+import '../widgets/image_editor.dart' show AdjustCategory;
 import 'history_manager.dart';
 
 enum EditorTool { crop, filters, adjust, drawing, text, stickers }
 
-/// Adjust values — all range from -1.0 to 1.0 (0.0 = no change).
+/// Adjust values — all range -1.0 to 1.0 (0.0 = no change).
 class AdjustValues {
+  // Light
   final double brightness;
   final double contrast;
+  final double highlights;
+  final double shadows;
+  // Color
   final double saturation;
   final double warmth;
+  final double tint;
+  final double vibrance;
+  // Detail
+  final double sharpness;
+  final double noiseReduction;
+  final double clarity;
 
   const AdjustValues({
     this.brightness = 0.0,
     this.contrast = 0.0,
+    this.highlights = 0.0,
+    this.shadows = 0.0,
     this.saturation = 0.0,
     this.warmth = 0.0,
+    this.tint = 0.0,
+    this.vibrance = 0.0,
+    this.sharpness = 0.0,
+    this.noiseReduction = 0.0,
+    this.clarity = 0.0,
   });
 
   AdjustValues copyWith({
     double? brightness,
     double? contrast,
+    double? highlights,
+    double? shadows,
     double? saturation,
     double? warmth,
+    double? tint,
+    double? vibrance,
+    double? sharpness,
+    double? noiseReduction,
+    double? clarity,
   }) {
     return AdjustValues(
       brightness: brightness ?? this.brightness,
       contrast: contrast ?? this.contrast,
+      highlights: highlights ?? this.highlights,
+      shadows: shadows ?? this.shadows,
       saturation: saturation ?? this.saturation,
       warmth: warmth ?? this.warmth,
+      tint: tint ?? this.tint,
+      vibrance: vibrance ?? this.vibrance,
+      sharpness: sharpness ?? this.sharpness,
+      noiseReduction: noiseReduction ?? this.noiseReduction,
+      clarity: clarity ?? this.clarity,
     );
   }
 }
@@ -123,8 +155,13 @@ class TextLayer {
 }
 
 /// Main controller for [ImageEditorWidget].
-/// Exposes all actions and notifies listeners on state change.
 class EditorController extends ChangeNotifier {
+  // ── Canvas size (used for pixel-accurate crop) ────────────────────────────
+  Size? canvasSize;
+
+  // ── Adjust category ───────────────────────────────────────────────────────
+  AdjustCategory adjustCategory = AdjustCategory.light;
+
   // ── Tool ──────────────────────────────────────────────────────────────────
   EditorTool _activeTool = EditorTool.filters;
   EditorTool get activeTool => _activeTool;
@@ -153,9 +190,7 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void commitAdjust() {
-    _pushSnapshot();
-  }
+  void commitAdjust() => _pushSnapshot();
 
   // ── Drawing ───────────────────────────────────────────────────────────────
   final List<DrawingStroke> _strokes = [];
@@ -163,24 +198,15 @@ class EditorController extends ChangeNotifier {
 
   Color _brushColor = Colors.red;
   Color get brushColor => _brushColor;
-  void setBrushColor(Color c) {
-    _brushColor = c;
-    notifyListeners();
-  }
+  void setBrushColor(Color c) { _brushColor = c; notifyListeners(); }
 
   double _brushSize = 6.0;
   double get brushSize => _brushSize;
-  void setBrushSize(double s) {
-    _brushSize = s;
-    notifyListeners();
-  }
+  void setBrushSize(double s) { _brushSize = s; notifyListeners(); }
 
   bool _isEraser = false;
   bool get isEraser => _isEraser;
-  void setEraser(bool v) {
-    _isEraser = v;
-    notifyListeners();
-  }
+  void setEraser(bool v) { _isEraser = v; notifyListeners(); }
 
   void addStroke(DrawingStroke stroke) {
     _strokes.add(stroke);
@@ -200,10 +226,7 @@ class EditorController extends ChangeNotifier {
 
   void updateTextLayer(TextLayer updated) {
     final i = _textLayers.indexWhere((l) => l.id == updated.id);
-    if (i != -1) {
-      _textLayers[i] = updated;
-      notifyListeners();
-    }
+    if (i != -1) { _textLayers[i] = updated; notifyListeners(); }
   }
 
   void removeTextLayer(String id) {
@@ -224,10 +247,7 @@ class EditorController extends ChangeNotifier {
 
   void updateSticker(StickerLayer updated) {
     final i = _stickerLayers.indexWhere((s) => s.id == updated.id);
-    if (i != -1) {
-      _stickerLayers[i] = updated;
-      notifyListeners();
-    }
+    if (i != -1) { _stickerLayers[i] = updated; notifyListeners(); }
   }
 
   void removeSticker(String id) {
@@ -256,28 +276,15 @@ class EditorController extends ChangeNotifier {
     ));
   }
 
-  void undo() {
-    final snap = _history.undo();
-    if (snap != null) _applySnapshot(snap);
-  }
-
-  void redo() {
-    final snap = _history.redo();
-    if (snap != null) _applySnapshot(snap);
-  }
+  void undo() { final s = _history.undo(); if (s != null) _applySnapshot(s); }
+  void redo() { final s = _history.redo(); if (s != null) _applySnapshot(s); }
 
   void _applySnapshot(EditorSnapshot snap) {
     _filter = snap.filter;
     _adjustValues = snap.adjustValues;
-    _strokes
-      ..clear()
-      ..addAll(snap.strokes);
-    _textLayers
-      ..clear()
-      ..addAll(snap.textLayers);
-    _stickerLayers
-      ..clear()
-      ..addAll(snap.stickerLayers);
+    _strokes..clear()..addAll(snap.strokes);
+    _textLayers..clear()..addAll(snap.textLayers);
+    _stickerLayers..clear()..addAll(snap.stickerLayers);
     notifyListeners();
   }
 
@@ -292,6 +299,5 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── Export key (used by ImageEditorWidget internally) ─────────────────────
   final GlobalKey exportKey = GlobalKey();
 }
