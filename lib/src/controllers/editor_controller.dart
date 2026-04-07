@@ -1,9 +1,6 @@
-import 'dart:typed_data';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../filters/filter_preset.dart';
 import '../models/editor_config.dart';
-import '../models/export_options.dart';
 import '../models/sticker_pack.dart';
 import '../widgets/image_editor.dart' show AdjustCategory;
 import 'history_manager.dart';
@@ -156,10 +153,7 @@ class TextLayer {
 
 /// Main controller for [ImageEditorWidget].
 class EditorController extends ChangeNotifier {
-  // ── Canvas size (used for pixel-accurate crop) ────────────────────────────
-  Size? canvasSize;
-
-  // ── Adjust category ───────────────────────────────────────────────────────
+  // ── Adjust category (for the professional panel tabs) ─────────────────────
   AdjustCategory adjustCategory = AdjustCategory.light;
 
   // ── Tool ──────────────────────────────────────────────────────────────────
